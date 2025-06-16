@@ -1,46 +1,52 @@
 # Stage 1: Build
-FROM node:18-alpine AS builder
+FROM python:3.9-slim AS builder
 
 # Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
-RUN npm install --frozen-lockfile
+# Copy requirements file
+COPY requirements.txt .
+
+# Create virtual environment and install dependencies
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Stage 2: Production
+FROM python:3.9-slim
+
+# Install curl for healthcheck
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy virtual environment from builder stage
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy model files first (these are critical)
+COPY spiral_model.keras mri_classifier.keras ./
 
 # Copy application files
 COPY . .
 
-# Set production environment
-ENV NODE_ENV=production
-ENV NEXT_PUBLIC_API_URL=http://127.0.0.1:5000
-
-# Build the application
-RUN npm run build
-
-# Stage 2: Production
-FROM node:18-alpine AS runner
-
-# Set working directory
-WORKDIR /app
-
-# Install production dependencies
-COPY --from=builder /app/package*.json ./
-RUN npm install --only=production --frozen-lockfile
-
-# Copy built application
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/next.config.js ./next.config.js
+# Create uploads and static directories
+RUN mkdir -p uploads static
 
 # Set environment variables
-ENV NODE_ENV=production
-ENV PORT=3000
-ENV NEXT_PUBLIC_API_URL=http://127.0.0.1:5000
+ENV FLASK_APP=app.py
+ENV FLASK_ENV=production
+ENV TF_CPP_MIN_LOG_LEVEL=2
 
 # Expose port
-EXPOSE 3000
+EXPOSE 5000
 
-# Start the application
-CMD ["npm", "start"] 
+# Run the application
+CMD ["python", "app.py"] 
